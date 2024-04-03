@@ -3,13 +3,15 @@ import com.bmuschko.gradle.docker.tasks.container.DockerStartContainer
 import com.bmuschko.gradle.docker.tasks.image.DockerBuildImage
 import com.bmuschko.gradle.docker.tasks.image.Dockerfile
 
-// We need this file to run a composite build core + native
 plugins {
     alias(libs.plugins.build.conventions)
     alias(nativelibs.plugins.cmake.generator) apply false
-    id("com.bmuschko.docker-remote-api") version "6.7.0"
+    alias(nativelibs.plugins.docker.remote.api)
+    alias(nativelibs.plugins.osdetector)
     `cpp-unit-test`
 }
+
+version = nativelibs.versions.native.platform.get()
 
 val tasksRequiredDebugArtifacts = setOf(
     tasks.build.name,
@@ -27,6 +29,12 @@ val rhelToolsetVersion = project.properties.getOrDefault("rhel.toolset.version",
 
 val centosVersion = project.properties.getOrDefault("centos.version", "7")
 val centosToolsetVersion = project.properties.getOrDefault("centos.toolset.version", "11")
+
+val taskToExecute = project.properties.getOrDefault("task", "pTML") as String
+
+val m2 = project.properties.getOrDefault("maven.repo.local", "${System.getProperty("user.home")}/.m2")
+
+version = "$version-${osdetector.release?.id}".removeSuffix("-null")
 
 val dockerFileCentos by tasks.creating(Dockerfile::class) {
     group = "docker"
@@ -52,7 +60,7 @@ val dockerFileCentos by tasks.creating(Dockerfile::class) {
 
     workingDir("/core/native")
     entryPoint("./gradlew")
-    defaultCommand("assemble", "--console=plain")
+    defaultCommand(taskToExecute, "--console=plain")
 }
 
 val buildImageCentos by tasks.creating(DockerBuildImage::class) {
@@ -62,7 +70,7 @@ val buildImageCentos by tasks.creating(DockerBuildImage::class) {
     images.add("native/centos$centosVersion")
 }
 
-val assembleInCentos by tasks.creating(Exec::class) {
+val runInCentos by tasks.creating(Exec::class) {
     group = "docker"
 
     dependsOn(buildImageCentos)
@@ -73,7 +81,9 @@ val assembleInCentos by tasks.creating(Exec::class) {
             "-v",
             "${layout.projectDirectory.asFile}/..:/core",
             "-v",
-            "${System.getProperty("user.home")}/.gradle:/root/.gradle",
+            "${gradle.gradleUserHomeDir}:/root/.gradle",
+            "-v",
+            "$m2:/root/.m2",
             "native/centos$centosVersion:latest"
     )
 }
@@ -97,7 +107,7 @@ val dockerFileRhel by tasks.creating(Dockerfile::class) {
 
     workingDir("/core/native")
     entryPoint("./gradlew")
-    defaultCommand("assemble", "--console=plain")
+    defaultCommand(taskToExecute, "--console=plain")
 }
 
 val buildImageRhel by tasks.creating(DockerBuildImage::class) {
@@ -107,7 +117,7 @@ val buildImageRhel by tasks.creating(DockerBuildImage::class) {
     images.add("native/redhat$rhelVersion")
 }
 
-val assembleInRhel by tasks.creating(Exec::class) {
+val runInRhel by tasks.creating(Exec::class) {
     group = "docker"
 
     dependsOn(buildImageRhel)
@@ -118,7 +128,9 @@ val assembleInRhel by tasks.creating(Exec::class) {
             "-v",
             "${layout.projectDirectory.asFile}/..:/core",
             "-v",
-            "${System.getProperty("user.home")}/.gradle:/root/.gradle",
+            "${gradle.gradleUserHomeDir}:/root/.gradle",
+            "-v",
+            "$m2:/root/.m2",
             "native/redhat$rhelVersion:latest"
     )
 }
@@ -126,6 +138,8 @@ val assembleInRhel by tasks.creating(Exec::class) {
 subprojects {
     apply(plugin = rootProject.libs.plugins.native.project.conventions.get().pluginId)
     apply(plugin = rootProject.nativelibs.plugins.cmake.generator.get().pluginId)
+
+    version = rootProject.version
 
     val c = mutableListOf(
         "-fPIC",
@@ -199,10 +213,6 @@ subprojects {
 
         // Define C compiler options
         compilerArgs.set(c)
-
-//        unitTest {
-//            compilerArgs.add("-fno-devirtualize")
-//        }
     }
 
     tasks.withType(CppCompile::class.java).configureEach {
@@ -215,10 +225,6 @@ subprojects {
         compilerArgs.set(cpp)
         compilerArgs.add("-DNLOGGER_USE_THREAD_LOCAL")
         compilerArgs.add("-DNLOGGER_LOG_BUFFER_SIZE=1024")
-
-//        unitTest {
-//            compilerArgs.add("-fno-devirtualize")
-//        }
     }
 
     tasks.withType(LinkSharedLibrary::class.java).configureEach {
